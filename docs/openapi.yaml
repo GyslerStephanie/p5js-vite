@@ -1,0 +1,648 @@
+openapi: 3.1.0
+info:
+  title: Sentinel Fraud Decisioning API
+  version: "1.0.0"
+  summary: Real-time fraud risk scoring and decisioning for financial platforms.
+  description: |
+    The Sentinel Fraud Decisioning API provides synchronous and batch endpoints to evaluate
+    transaction risk in milliseconds, enabling banks, fintechs, wallets, and government portals
+    to prevent fraud while preserving customer experience.
+  termsOfService: https://example.com/terms
+  contact:
+    name: Fraud Platform Support
+    url: https://example.com/support
+    email: support@example.com
+  license:
+    name: Proprietary
+    url: https://example.com/license
+servers:
+  - url: https://sandbox.api.example.com
+    description: Sandbox environment with relaxed rate limits and mock data.
+  - url: https://api.example.com
+    description: Production environment with live scoring.
+tags:
+  - name: Scoring
+    description: Real-time and batch transaction risk scoring.
+  - name: Events
+    description: Fetch previously scored transaction decisions.
+  - name: Operations
+    description: Health checks and schema retrieval.
+paths:
+  /v1/score:
+    post:
+      tags: [Scoring]
+      summary: Score a single transaction in real time.
+      description: |
+        Submits transaction metadata for immediate risk scoring. Responses are returned in
+        milliseconds with structured guidance on whether to allow, challenge, or block the
+        transaction.
+      operationId: scoreTransaction
+      security:
+        - OAuth2ClientCredentials: []
+        - ApiKeyAuth: []
+        - MutualTLS: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScoreRequest'
+            examples:
+              webTransfer:
+                summary: Web transfer with new payee
+                value:
+                  txn_id: "txn_1234567890"
+                  timestamp: "2024-05-14T16:21:00Z"
+                  amount:
+                    currency: "USD"
+                    value: 2450.75
+                  context: transfer
+                  counterparty_id: "hash_payee_001"
+                  payer_id: "hash_customer_123"
+                  device:
+                    device_id: "hash_device_abc"
+                    ip_partial: "203.0.113.0/24"
+                    geo_coarse: "US-CA"
+                  signals:
+                    keystroke_variance: 0.82
+                    velocity_24h_bucket: "3-5"
+                  channel: web
+              mobileCard:
+                summary: Mobile card transaction with elevated velocity
+                value:
+                  txn_id: "txn_9876543210"
+                  timestamp: "2024-05-14T16:25:43Z"
+                  amount:
+                    currency: "EUR"
+                    value: 59.99
+                  context: card
+                  counterparty_id: "hash_merchant_xyz"
+                  payer_id: "hash_cardholder_987"
+                  device:
+                    device_id: "hash_device_ios"
+                    ip_partial: "198.51.100.0/28"
+                    geo_coarse: "DE-BE"
+                  signals:
+                    past_reversal_rate: 0.12
+                    velocity_24h_bucket: "10+"
+                  channel: ios
+      responses:
+        '200':
+          description: Risk score generated successfully.
+          headers:
+            X-Trace-Id:
+              description: Identifier for correlating support inquiries.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoreResponse'
+              examples:
+                allow:
+                  summary: Allowed transaction with low risk
+                  value:
+                    risk_score: 12
+                    risk_level: low
+                    decision: allow
+                    explanations:
+                      - "Trusted device with consistent behavior"
+                    confidence: 0.93
+                    policy_triggered: []
+                    trace_id: "trace_01HGFXG6S8P0P3"
+                    latency_ms: 2
+                challenge:
+                  summary: Challenge decision with medium risk
+                  value:
+                    risk_score: 64
+                    risk_level: medium
+                    decision: challenge
+                    explanations:
+                      - "New payee + amount anomaly"
+                      - "Velocity spike past 24h"
+                    confidence: 0.81
+                    policy_triggered:
+                      - "policy_new_payee_anomaly"
+                    trace_id: "trace_01HGFXJ7T3ND4K"
+                    latency_ms: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /v1/batch/score:
+    post:
+      tags: [Scoring]
+      summary: Submit a batch of transactions for asynchronous scoring.
+      description: |
+        Accepts arrays of transaction payloads or newline-delimited JSON files for asynchronous
+        processing. Returns an ingestion receipt and a callback URL or polling token for
+        retrieving results.
+      operationId: submitBatch
+      security:
+        - OAuth2ClientCredentials: []
+        - ApiKeyAuth: []
+        - MutualTLS: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchScoreRequest'
+            examples:
+              arrayPayload:
+                summary: Inline array batch submission
+                value:
+                  batch_id: "batch_20240514_001"
+                  mode: inline
+                  transactions:
+                    - txn_id: "txn_01"
+                      timestamp: "2024-05-14T08:00:00Z"
+                      amount:
+                        currency: "USD"
+                        value: 499.0
+                      context: transfer
+                      counterparty_id: "hash_payee_A"
+                      payer_id: "hash_payer_A"
+                      device:
+                        device_id: "hash_device_A"
+                        ip_partial: "192.0.2.0/26"
+                        geo_coarse: "US-NY"
+                      channel: api
+                    - txn_id: "txn_02"
+                      timestamp: "2024-05-14T08:00:05Z"
+                      amount:
+                        currency: "USD"
+                        value: 3250.0
+                      context: invoice
+                      counterparty_id: "hash_vendor_B"
+                      payer_id: "hash_payer_A"
+                      device:
+                        device_id: "hash_device_B"
+                        ip_partial: "192.0.2.64/26"
+                        geo_coarse: "US-NY"
+                      channel: api
+          multipart/form-data:
+            schema:
+              type: object
+              required: [batch_id, mode, file]
+              properties:
+                batch_id:
+                  type: string
+                mode:
+                  type: string
+                  enum: [file]
+                file:
+                  type: string
+                  format: binary
+            encoding:
+              file:
+                contentType: application/x-ndjson
+                headers:
+                  Content-Hash:
+                    description: SHA-256 hash of the uploaded file for integrity verification.
+                    schema:
+                      type: string
+      responses:
+        '202':
+          description: Batch accepted for processing.
+          headers:
+            Retry-After:
+              description: Suggested polling interval in seconds.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchSubmissionResponse'
+              examples:
+                accepted:
+                  summary: Batch accepted response
+                  value:
+                    batch_id: "batch_20240514_001"
+                    status: accepted
+                    callback_url: "https://sandbox.api.example.com/v1/events/batch_20240514_001"
+                    expires_at: "2024-05-14T08:15:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          description: Payload too large.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                tooLarge:
+                  value:
+                    error_code: PAYLOAD_TOO_LARGE
+                    message: "Batch size exceeds allowed limit of 10,000 records."
+                    remediation: "Reduce the batch or switch to file upload mode."
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /v1/events/{id}:
+    get:
+      tags: [Events]
+      summary: Fetch a specific decision record or batch result manifest.
+      description: |
+        Retrieves the decision details for a previously scored transaction or the manifest of
+        a completed batch submission. Sandbox results are retained for 7 days, production for 90 days.
+      operationId: getEvent
+      security:
+        - OAuth2ClientCredentials: []
+        - ApiKeyAuth: []
+        - MutualTLS: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Transaction ID, trace ID, or batch identifier.
+      responses:
+        '200':
+          description: Decision details found.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ScoreResponse'
+                  - $ref: '#/components/schemas/BatchResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Decision not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missing:
+                  value:
+                    error_code: NOT_FOUND
+                    message: "No decision found for id trace_123."
+                    remediation: "Confirm the identifier and retention window."
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /v1/health:
+    get:
+      tags: [Operations]
+      summary: Retrieve service status and latency metrics.
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service degraded or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                degraded:
+                  value:
+                    error_code: SERVICE_UNAVAILABLE
+                    message: "Latency above SLA thresholds."
+                    remediation: "Retry with exponential backoff or failover."
+  /v1/schema:
+    get:
+      tags: [Operations]
+      summary: Download the latest machine-readable API schema.
+      description: Returns the OpenAPI 3.1 specification for integration automation.
+      operationId: getSchema
+      security: []
+      responses:
+        '200':
+          description: Schema returned successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Serialized OpenAPI document.
+            application/yaml:
+              schema:
+                type: string
+components:
+  securitySchemes:
+    OAuth2ClientCredentials:
+      type: oauth2
+      description: OAuth 2.0 client credentials grant.
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth2/token
+          scopes:
+            score: Submit transactions for scoring.
+            events: Retrieve decision history.
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Environment-scoped API key issued per client.
+    MutualTLS:
+      type: mutualTLS
+      description: Optional mutual TLS for enterprise tenants.
+  schemas:
+    Amount:
+      type: object
+      required: [currency, value]
+      properties:
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          description: ISO 4217 currency code.
+        value:
+          type: number
+          format: double
+          description: Monetary value in major units.
+    Device:
+      type: object
+      required: [device_id]
+      properties:
+        device_id:
+          type: string
+          description: Hashed device identifier.
+        ip_partial:
+          type: string
+          description: Partially masked IP address or subnet.
+        geo_coarse:
+          type: string
+          description: Country or region code.
+    Signals:
+      type: object
+      additionalProperties: true
+      description: Optional behavioral metrics or derived features.
+      properties:
+        keystroke_variance:
+          type: number
+          format: float
+        velocity_24h_bucket:
+          type: string
+        past_reversal_rate:
+          type: number
+          format: float
+    ScoreRequest:
+      type: object
+      required: [txn_id, timestamp, amount, context, counterparty_id, payer_id, device, channel]
+      properties:
+        txn_id:
+          type: string
+          description: Client-side transaction identifier.
+        timestamp:
+          type: string
+          format: date-time
+        amount:
+          $ref: '#/components/schemas/Amount'
+        context:
+          type: string
+          enum: [transfer, card, invoice, defi_sign, wallet_send, other]
+        counterparty_id:
+          type: string
+          description: Hashed identifier for counterparty.
+        payer_id:
+          type: string
+          description: Hashed identifier for payer.
+        device:
+          $ref: '#/components/schemas/Device'
+        signals:
+          $ref: '#/components/schemas/Signals'
+        channel:
+          type: string
+          enum: [web, ios, android, api]
+    ScoreResponse:
+      type: object
+      required: [risk_score, risk_level, decision, explanations, confidence, policy_triggered, trace_id, latency_ms]
+      properties:
+        risk_score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        decision:
+          type: string
+          enum: [allow, challenge, block]
+        explanations:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        policy_triggered:
+          type: array
+          items:
+            type: string
+        trace_id:
+          type: string
+        latency_ms:
+          type: integer
+          minimum: 0
+    BatchScoreRequest:
+      type: object
+      required: [batch_id, mode]
+      properties:
+        batch_id:
+          type: string
+        mode:
+          type: string
+          enum: [inline, file]
+        callback_url:
+          type: string
+          format: uri
+          description: Optional webhook endpoint for asynchronous callbacks.
+        transactions:
+          type: array
+          description: Required when mode is inline.
+          items:
+            $ref: '#/components/schemas/ScoreRequest'
+    BatchSubmissionResponse:
+      type: object
+      required: [batch_id, status]
+      properties:
+        batch_id:
+          type: string
+        status:
+          type: string
+          enum: [accepted, processing, completed, failed]
+        callback_url:
+          type: string
+          format: uri
+        polling_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+    BatchResult:
+      type: object
+      required: [batch_id, status, results]
+      properties:
+        batch_id:
+          type: string
+        status:
+          type: string
+          enum: [processing, completed, failed, expired]
+        generated_at:
+          type: string
+          format: date-time
+        results:
+          type: array
+          items:
+            type: object
+            required: [txn_id, decision]
+            properties:
+              txn_id:
+                type: string
+              decision:
+                type: string
+                enum: [allow, challenge, block]
+              risk_score:
+                type: integer
+              risk_level:
+                type: string
+                enum: [low, medium, high]
+              explanations:
+                type: array
+                items:
+                  type: string
+              policy_triggered:
+                type: array
+                items:
+                  type: string
+              trace_id:
+                type: string
+    HealthResponse:
+      type: object
+      required: [status, latency_ms, last_updated]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unavailable]
+        latency_ms:
+          type: object
+          properties:
+            p50:
+              type: number
+            p95:
+              type: number
+            p99:
+              type: number
+        region_status:
+          type: array
+          items:
+            type: object
+            properties:
+              region:
+                type: string
+              status:
+                type: string
+        last_updated:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+        remediation:
+          type: string
+  responses:
+    BadRequest:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalidContext:
+              value:
+                error_code: INVALID_CONTEXT
+                message: "context must be one of transfer|card|invoice|defi_sign|wallet_send|other"
+                remediation: "Update the payload to use a supported context."
+    Unauthorized:
+      description: Authentication failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missingAuth:
+              value:
+                error_code: UNAUTHORIZED
+                message: "Missing or invalid credentials."
+                remediation: "Ensure OAuth token or API key is present and active."
+    Forbidden:
+      description: Authenticated client lacks permission.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            scopeDenied:
+              value:
+                error_code: INSUFFICIENT_SCOPE
+                message: "The provided credentials are not scoped for scoring."
+                remediation: "Request the score scope from the API administrator."
+    RateLimitExceeded:
+      description: Rate limit exceeded.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until the limit resets.
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            throttled:
+              value:
+                error_code: RATE_LIMITED
+                message: "Too many requests."
+                remediation: "Throttle requests or contact support for higher quotas."
+    ServerError:
+      description: Unexpected server error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            generic:
+              value:
+                error_code: INTERNAL_ERROR
+                message: "Unexpected error occurred."
+                remediation: "Retry with exponential backoff or contact support if persistent."
